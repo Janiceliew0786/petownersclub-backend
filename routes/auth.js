@@ -2,8 +2,10 @@ const express = require('express');
 const router  = express.Router();
 const bcrypt  = require('bcryptjs');
 const jwt     = require('jsonwebtoken');
+const crypto  = require('crypto');
 const db      = require('../db');
 const verifyToken = require('../middleware/auth');
+const { sendResetCodeEmail } = require('../utils/mailer');
 
 // REGISTER
 router.post('/register', (req, res) => {
@@ -14,7 +16,6 @@ router.post('/register', (req, res) => {
   db.query('SELECT * FROM Users WHERE Email = ?', [email], (err, results) => {
     if (err) return res.status(500).json({ message: 'Database error.', error: err.message });
     if (results.length > 0) return res.status(409).json({ message: 'Email already registered.' });
-
     const hashedPassword = bcrypt.hashSync(password, 10);
     const sql = 'INSERT INTO Users (Name, Email, Password, Role, ContactNumber) VALUES (?, ?, ?, ?, ?)';
     db.query(sql, [name, email, hashedPassword, role || 'Owner', contactNumber || null], (err, result) => {
@@ -28,22 +29,18 @@ router.post('/register', (req, res) => {
 router.post('/login', (req, res) => {
   const { email, password } = req.body;
   if (!email || !password) return res.status(400).json({ message: 'Email and password are required.' });
-
   db.query('SELECT * FROM Users WHERE Email = ?', [email], (err, results) => {
     if (err) return res.status(500).json({ message: 'Database error.', error: err.message });
     if (results.length === 0) return res.status(401).json({ message: 'Invalid email or password.' });
-
     const user = results[0];
     if (!bcrypt.compareSync(password, user.Password)) {
       return res.status(401).json({ message: 'Invalid email or password.' });
     }
-
     const token = jwt.sign(
       { userID: user.UserID, role: user.Role },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
-
     return res.status(200).json({
       message: 'Login successful.',
       token,
@@ -63,14 +60,82 @@ router.post('/logout', (req, res) => {
   return res.status(200).json({ message: 'Logged out successfully.' });
 });
 
+// FORGOT PASSWORD — generates a 6-digit code, emails it, stores it with a
+// 15-minute expiry. Always returns a generic success message even if the
+// email isn't registered, so this endpoint can't be used to check which
+// emails have accounts (a common security practice for reset flows).
+router.post('/forgot-password', (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ message: 'Email is required.' });
+
+  db.query('SELECT UserID FROM Users WHERE Email = ?', [email], (err, results) => {
+    if (err) return res.status(500).json({ message: 'Database error.', error: err.message });
+
+    if (results.length === 0) {
+      // Don't reveal whether the email exists — respond the same either way.
+      return res.status(200).json({ message: 'If that email is registered, a reset code has been sent.' });
+    }
+
+    const code = crypto.randomInt(100000, 999999).toString();
+    const expiry = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes from now
+
+    db.query(
+      'UPDATE Users SET ResetCode = ?, ResetCodeExpiry = ? WHERE Email = ?',
+      [code, expiry, email],
+      async (err) => {
+        if (err) return res.status(500).json({ message: 'Database error.', error: err.message });
+        try {
+          await sendResetCodeEmail(email, code);
+        } catch (emailErr) {
+          console.error('Failed to send reset email:', emailErr.message);
+          return res.status(500).json({ message: 'Could not send reset email. Please try again.' });
+        }
+        return res.status(200).json({ message: 'If that email is registered, a reset code has been sent.' });
+      }
+    );
+  });
+});
+
+// RESET PASSWORD — verifies the code and expiry, then updates the password
+// and clears the reset fields so the code can't be reused.
+router.post('/reset-password', (req, res) => {
+  const { email, code, newPassword } = req.body;
+  if (!email || !code || !newPassword) {
+    return res.status(400).json({ message: 'Email, code and new password are required.' });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ message: 'Password must be at least 6 characters.' });
+  }
+
+  db.query('SELECT * FROM Users WHERE Email = ?', [email], (err, results) => {
+    if (err) return res.status(500).json({ message: 'Database error.', error: err.message });
+    if (results.length === 0) return res.status(400).json({ message: 'Invalid code or email.' });
+
+    const user = results[0];
+    if (!user.ResetCode || user.ResetCode !== code) {
+      return res.status(400).json({ message: 'Invalid code.' });
+    }
+    if (!user.ResetCodeExpiry || new Date(user.ResetCodeExpiry) < new Date()) {
+      return res.status(400).json({ message: 'This code has expired. Please request a new one.' });
+    }
+
+    const hashedPassword = bcrypt.hashSync(newPassword, 10);
+    db.query(
+      'UPDATE Users SET Password = ?, ResetCode = NULL, ResetCodeExpiry = NULL WHERE Email = ?',
+      [hashedPassword, email],
+      (err) => {
+        if (err) return res.status(500).json({ message: 'Could not reset password.', error: err.message });
+        return res.status(200).json({ message: 'Password reset successful. You can now log in.' });
+      }
+    );
+  });
+});
 
 // UPDATE PROFILE PHOTO
 router.put('/photo', verifyToken, (req, res) => {
   const { photoBase64 } = req.body;
   const userID = req.user.userID;
-
   if (!photoBase64) return res.status(400).json({ message: 'Photo data is required.' });
-
   db.query('UPDATE Users SET PhotoBase64 = ? WHERE UserID = ?', [photoBase64, userID], (err) => {
     if (err) {
       console.error('PUT photo error:', err.message);
