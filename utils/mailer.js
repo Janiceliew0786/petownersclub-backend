@@ -1,40 +1,52 @@
-const nodemailer = require('nodemailer');
 require('dotenv').config();
 
-// Brevo's SMTP relay — free tier, works for any recipient once your sender
-// email is verified (unlike some providers that restrict you to your own
-// inbox until you verify a whole domain).
-const transporter = nodemailer.createTransport({
-  host: process.env.SMTP_HOST || 'smtp-relay.brevo.com',
-  port: Number(process.env.SMTP_PORT) || 587,
-  secure: false, // Brevo uses STARTTLS on port 587, not implicit TLS
-  auth: {
-    user: process.env.SMTP_USER,
-    pass: process.env.SMTP_PASS,
-  },
-  // Railway (and several other container hosts) attempt IPv6 first, and if
-  // their IPv6 route to smtp-relay.brevo.com is broken, the connection just
-  // hangs until it times out — even though IPv4 works fine. Forcing IPv4
-  // here skips that broken path entirely.
-  family: 4,
-  connectionTimeout: 10000, // fail fast (10s) instead of hanging for a minute
-});
+// Switched from SMTP (nodemailer) to Brevo's HTTP API. Railway blocks
+// outbound SMTP ports (25/465/587) on some plans to prevent spam abuse —
+// that's what was causing the "Connection timeout" even after forcing
+// IPv4. The HTTP API sends over regular HTTPS (port 443), which is never
+// blocked, so this sidesteps the problem entirely. Uses Node's built-in
+// fetch (Node 18+, no new dependency needed).
+
+// Parses EMAIL_FROM in the format: "Name" <email@example.com>
+function parseFrom(raw) {
+  const match = raw?.match(/^"?([^"<]*)"?\s*<(.+)>$/);
+  if (match) {
+    return { name: match[1].trim(), email: match[2].trim() };
+  }
+  // Fallback if EMAIL_FROM is just a bare email address
+  return { name: 'A Pet Owners Club', email: raw };
+}
 
 async function sendResetCodeEmail(toEmail, code) {
-  await transporter.sendMail({
-    from: process.env.EMAIL_FROM || '"A Pet Owners Club" <no-reply@petownersclub.app>',
-    to: toEmail,
-    subject: 'Your password reset code',
-    text: `Your A Pet Owners Club password reset code is: ${code}\n\nThis code expires in 15 minutes. If you didn't request this, you can safely ignore this email.`,
-    html: `
-      <div style="font-family: sans-serif; max-width: 400px; margin: 0 auto;">
-        <h2>Password Reset Code</h2>
-        <p>Use this code in the app to reset your password:</p>
-        <p style="font-size: 32px; font-weight: bold; letter-spacing: 4px; color: #1e3a5f;">${code}</p>
-        <p style="color: #666; font-size: 13px;">This code expires in 15 minutes. If you didn't request this, you can safely ignore this email.</p>
-      </div>
-    `,
+  const sender = parseFrom(process.env.EMAIL_FROM);
+
+  const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'api-key': process.env.BREVO_API_KEY,
+    },
+    body: JSON.stringify({
+      sender,
+      to: [{ email: toEmail }],
+      subject: 'Your password reset code',
+      textContent: `Your A Pet Owners Club password reset code is: ${code}\n\nThis code expires in 15 minutes. If you didn't request this, you can safely ignore this email.`,
+      htmlContent: `
+        <div style="font-family: sans-serif; max-width: 400px; margin: 0 auto;">
+          <h2>Password Reset Code</h2>
+          <p>Use this code in the app to reset your password:</p>
+          <p style="font-size: 32px; font-weight: bold; letter-spacing: 4px; color: #1e3a5f;">${code}</p>
+          <p style="color: #666; font-size: 13px;">This code expires in 15 minutes. If you didn't request this, you can safely ignore this email.</p>
+        </div>
+      `,
+    }),
   });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Brevo API error (${response.status}): ${errorBody}`);
+  }
 }
 
 module.exports = { sendResetCodeEmail };
