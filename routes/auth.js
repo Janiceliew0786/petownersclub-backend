@@ -68,12 +68,28 @@ router.post('/forgot-password', (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ message: 'Email is required.' });
 
-  db.query('SELECT UserID FROM Users WHERE Email = ?', [email], (err, results) => {
+  db.query('SELECT UserID, ResetCodeExpiry FROM Users WHERE Email = ?', [email], (err, results) => {
     if (err) return res.status(500).json({ message: 'Database error.', error: err.message });
 
     if (results.length === 0) {
       // Don't reveal whether the email exists — respond the same either way.
       return res.status(200).json({ message: 'If that email is registered, a reset code has been sent.' });
+    }
+
+    // Rate limiting: derived from the existing ResetCodeExpiry field instead
+    // of adding a new column. A code lasts 15 minutes (900s); if more than
+    // 840s remain until it expires, the previous request was made less than
+    // 60 seconds ago — block a resend until that cooldown passes.
+    const existingExpiry = results[0].ResetCodeExpiry;
+    if (existingExpiry) {
+      const secondsUntilExpiry = (new Date(existingExpiry) - new Date()) / 1000;
+      if (secondsUntilExpiry > 840) {
+        const waitSeconds = Math.ceil(secondsUntilExpiry - 840);
+        return res.status(429).json({
+          message: `Please wait ${waitSeconds} seconds before requesting another code.`,
+          waitSeconds,
+        });
+      }
     }
 
     const code = crypto.randomInt(100000, 999999).toString();
