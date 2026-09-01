@@ -12,6 +12,12 @@ const transporter = nodemailer.createTransport({
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
   },
+  // Railway (and several other container hosts) attempt IPv6 first, and if
+  // their IPv6 route to smtp-relay.brevo.com is broken, the connection just
+  // hangs until it times out — even though IPv4 works fine. Forcing IPv4
+  // here skips that broken path entirely.
+  family: 4,
+  connectionTimeout: 10000, // fail fast (10s) instead of hanging for a minute
 });
 
 async function sendResetCodeEmail(toEmail, code) {
