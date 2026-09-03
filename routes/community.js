@@ -13,10 +13,12 @@ router.get('/', (req, res) => {
   let sql = `
     SELECT
       p.PostID, p.UserID, p.Category, p.Topic, p.Content, p.MediaURL, p.CreatedAt,
-      u.Name AS AuthorName, u.Role AS AuthorRole,
+      u.Name AS AuthorName, u.Role AS AuthorRole, u.VerificationStatus AS AuthorVerificationStatus,
       (SELECT COUNT(*) FROM PostLikes l WHERE l.PostID = p.PostID) AS LikeCount,
       (SELECT COUNT(*) FROM PostComments c WHERE c.PostID = p.PostID) AS CommentCount,
-      (SELECT COUNT(*) FROM PostLikes l WHERE l.PostID = p.PostID AND l.UserID = ?) AS UserLiked
+      (SELECT COUNT(*) FROM PostLikes l WHERE l.PostID = p.PostID AND l.UserID = ?) AS UserLiked,
+      (SELECT COUNT(*) FROM HelpfulMarks h JOIN PostComments c2 ON h.CommentID = c2.CommentID
+       WHERE c2.UserID = p.UserID) AS AuthorHelpfulCount
     FROM CommunityPosts p
     JOIN Users u ON p.UserID = u.UserID
     WHERE 1=1
@@ -65,12 +67,19 @@ router.post('/', (req, res) => {
   });
 });
 
-// DELETE POST
+// DELETE POST — the owner can delete their own; an Admin can delete any
+// post (content moderation).
 router.delete('/:id', (req, res) => {
   const postID = req.params.id;
   const userID = req.user.userID;
+  const isAdmin = req.user.role === 'Admin';
 
-  db.query('DELETE FROM CommunityPosts WHERE PostID = ? AND UserID = ?', [postID, userID], (err, result) => {
+  const sql = isAdmin
+    ? 'DELETE FROM CommunityPosts WHERE PostID = ?'
+    : 'DELETE FROM CommunityPosts WHERE PostID = ? AND UserID = ?';
+  const params = isAdmin ? [postID] : [postID, userID];
+
+  db.query(sql, params, (err, result) => {
     if (err) return res.status(500).json({ message: 'Database error.' });
     if (result.affectedRows === 0) return res.status(404).json({ message: 'Post not found.' });
     return res.status(200).json({ message: 'Post deleted.' });
@@ -101,14 +110,19 @@ router.post('/:id/like', (req, res) => {
 // GET COMMENTS
 router.get('/:id/comments', (req, res) => {
   const postID = req.params.id;
+  const myID   = req.user.userID;
   const sql = `
-    SELECT c.*, u.Name AS AuthorName, u.Role AS AuthorRole
+    SELECT c.*, u.Name AS AuthorName, u.Role AS AuthorRole, u.VerificationStatus AS AuthorVerificationStatus,
+      (SELECT COUNT(*) FROM HelpfulMarks h WHERE h.CommentID = c.CommentID) AS HelpfulCount,
+      (SELECT COUNT(*) FROM HelpfulMarks h WHERE h.CommentID = c.CommentID AND h.UserID = ?) AS UserMarkedHelpful,
+      (SELECT COUNT(*) FROM HelpfulMarks h2 JOIN PostComments c2 ON h2.CommentID = c2.CommentID
+       WHERE c2.UserID = c.UserID) AS AuthorHelpfulCount
     FROM PostComments c
     JOIN Users u ON c.UserID = u.UserID
     WHERE c.PostID = ?
     ORDER BY c.CreatedAt ASC
   `;
-  db.query(sql, [postID], (err, results) => {
+  db.query(sql, [myID, postID], (err, results) => {
     if (err) {
       console.error('GET comments error:', err.message);
       return res.status(500).json({ message: 'Database error.' });
@@ -131,6 +145,28 @@ router.post('/:id/comments', (req, res) => {
       return res.status(500).json({ message: 'Could not add comment.' });
     }
     return res.status(201).json({ message: 'Comment added.', commentID: result.insertId });
+  });
+});
+
+// TOGGLE HELPFUL MARK — mainly used on vet answers, but not restricted to
+// them at the database level (frontend decides where to show the button).
+router.post('/comments/:commentID/helpful', (req, res) => {
+  const { commentID } = req.params;
+  const userID = req.user.userID;
+
+  db.query('SELECT * FROM HelpfulMarks WHERE CommentID = ? AND UserID = ?', [commentID, userID], (err, rows) => {
+    if (err) return res.status(500).json({ message: 'Database error.' });
+    if (rows.length > 0) {
+      db.query('DELETE FROM HelpfulMarks WHERE CommentID = ? AND UserID = ?', [commentID, userID], (err) => {
+        if (err) return res.status(500).json({ message: 'Database error.' });
+        return res.status(200).json({ message: 'Helpful mark removed.', marked: false });
+      });
+    } else {
+      db.query('INSERT INTO HelpfulMarks (CommentID, UserID) VALUES (?, ?)', [commentID, userID], (err) => {
+        if (err) return res.status(500).json({ message: 'Database error.' });
+        return res.status(200).json({ message: 'Marked as helpful.', marked: true });
+      });
+    }
   });
 });
 

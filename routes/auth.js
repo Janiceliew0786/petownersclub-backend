@@ -6,22 +6,48 @@ const crypto  = require('crypto');
 const db      = require('../db');
 const verifyToken = require('../middleware/auth');
 const { sendResetCodeEmail } = require('../utils/mailer');
+const { auth: firebaseAuth } = require('../firebaseAdmin');
 
 // REGISTER
 router.post('/register', (req, res) => {
-  const { name, email, password, role, contactNumber } = req.body;
+  const { name, email, password, role, contactNumber, licenseNumber, licensePhotoBase64 } = req.body;
   if (!name || !email || !password) {
     return res.status(400).json({ message: 'Name, email and password are required.' });
   }
+  const finalRole = role || 'Owner';
+  if (finalRole === 'Veterinarian' && !licenseNumber) {
+    return res.status(400).json({ message: 'A license number is required to register as a Veterinarian.' });
+  }
+
   db.query('SELECT * FROM Users WHERE Email = ?', [email], (err, results) => {
     if (err) return res.status(500).json({ message: 'Database error.', error: err.message });
     if (results.length > 0) return res.status(409).json({ message: 'Email already registered.' });
     const hashedPassword = bcrypt.hashSync(password, 10);
-    const sql = 'INSERT INTO Users (Name, Email, Password, Role, ContactNumber) VALUES (?, ?, ?, ?, ?)';
-    db.query(sql, [name, email, hashedPassword, role || 'Owner', contactNumber || null], (err, result) => {
-      if (err) return res.status(500).json({ message: 'Could not register user.', error: err.message });
-      return res.status(201).json({ message: 'Registration successful.', userID: result.insertId });
-    });
+
+    // Vets start Pending until an admin reviews their license — the vet
+    // badge only shows once VerificationStatus is 'Verified'. Owners are
+    // 'Not Applicable' since verification doesn't apply to them.
+    const verificationStatus = finalRole === 'Veterinarian' ? 'Pending' : 'Not Applicable';
+
+    const sql = `INSERT INTO Users
+      (Name, Email, Password, Role, ContactNumber, VerificationStatus, LicenseNumber, LicensePhotoBase64)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+    db.query(
+      sql,
+      [
+        name, email, hashedPassword, finalRole, contactNumber || null,
+        verificationStatus, licenseNumber || null, licensePhotoBase64 || null,
+      ],
+      (err, result) => {
+        if (err) return res.status(500).json({ message: 'Could not register user.', error: err.message });
+        return res.status(201).json({
+          message: finalRole === 'Veterinarian'
+            ? 'Registration successful. Your veterinarian account is pending verification.'
+            : 'Registration successful.',
+          userID: result.insertId,
+        });
+      }
+    );
   });
 });
 
@@ -36,6 +62,9 @@ router.post('/login', (req, res) => {
     if (!bcrypt.compareSync(password, user.Password)) {
       return res.status(401).json({ message: 'Invalid email or password.' });
     }
+    if (user.IsActive === 0) {
+      return res.status(403).json({ message: 'This account has been deactivated. Contact support if you believe this is a mistake.' });
+    }
     const token = jwt.sign(
       { userID: user.UserID, role: user.Role },
       process.env.JWT_SECRET,
@@ -45,11 +74,12 @@ router.post('/login', (req, res) => {
       message: 'Login successful.',
       token,
       user: {
-        userID:       user.UserID,
-        name:         user.Name,
-        email:        user.Email,
-        role:         user.Role,
-        photoBase64:  user.PhotoBase64 || null,
+        userID:             user.UserID,
+        name:               user.Name,
+        email:              user.Email,
+        role:               user.Role,
+        photoBase64:        user.PhotoBase64 || null,
+        verificationStatus: user.VerificationStatus,
       },
     });
   });
@@ -164,7 +194,13 @@ router.put('/photo', verifyToken, (req, res) => {
 // GET PROFILE
 router.get('/profile', verifyToken, (req, res) => {
   const userID = req.user.userID;
-  db.query('SELECT UserID, Name, Email, Role, ContactNumber, PhotoBase64 FROM Users WHERE UserID = ?', [userID], (err, results) => {
+  db.query(
+    `SELECT UserID, Name, Email, Role, ContactNumber, PhotoBase64, VerificationStatus, LicenseNumber, LicensePhotoBase64,
+      (SELECT COUNT(*) FROM HelpfulMarks h JOIN PostComments c ON h.CommentID = c.CommentID
+       WHERE c.UserID = Users.UserID) AS HelpfulCount
+     FROM Users WHERE UserID = ?`,
+    [userID],
+    (err, results) => {
     if (err) return res.status(500).json({ message: 'Database error.' });
     if (results.length === 0) return res.status(404).json({ message: 'User not found.' });
     return res.status(200).json({ user: results[0] });
@@ -181,6 +217,81 @@ router.put('/profile', verifyToken, (req, res) => {
     if (err) return res.status(500).json({ message: 'Could not update profile.' });
     return res.status(200).json({ message: 'Profile updated.' });
   });
+});
+
+// UPDATE VET LICENSE / CREDENTIALS
+// Any change to license number or certificate photo resets VerificationStatus
+// back to Pending — a verified vet who edits their credentials must be
+// re-reviewed, otherwise editing would let someone bypass verification
+// entirely after the fact.
+router.put('/license', verifyToken, (req, res) => {
+  const userID = req.user.userID;
+  const { licenseNumber, licensePhotoBase64 } = req.body;
+
+  if (req.user.role !== 'Veterinarian') {
+    return res.status(403).json({ message: 'Only veterinarian accounts have license credentials.' });
+  }
+  if (!licenseNumber || !licenseNumber.trim()) {
+    return res.status(400).json({ message: 'License number is required.' });
+  }
+
+  const sql = `UPDATE Users
+               SET LicenseNumber = ?, LicensePhotoBase64 = ?, VerificationStatus = 'Pending'
+               WHERE UserID = ?`;
+  db.query(sql, [licenseNumber.trim(), licensePhotoBase64 || null, userID], (err) => {
+    if (err) return res.status(500).json({ message: 'Could not update credentials.', error: err.message });
+    return res.status(200).json({
+      message: 'Credentials updated. Your account is pending verification again.',
+      verificationStatus: 'Pending',
+    });
+  });
+});
+
+// PUBLIC PROFILE — safe, non-sensitive fields for viewing another user's
+// profile (e.g. tapping their name on a post/comment/listing). Excludes
+// Password, ResetCode, and other private fields.
+router.get('/public-profile/:userID', verifyToken, (req, res) => {
+  const { userID } = req.params;
+  db.query(
+    `SELECT UserID, Name, Email, ContactNumber, Role, PhotoBase64, VerificationStatus,
+      (SELECT COUNT(*) FROM HelpfulMarks h JOIN PostComments c ON h.CommentID = c.CommentID
+       WHERE c.UserID = Users.UserID) AS HelpfulCount
+     FROM Users WHERE UserID = ?`,
+    [userID],
+    (err, results) => {
+      if (err) return res.status(500).json({ message: 'Database error.', error: err.message });
+      if (results.length === 0) return res.status(404).json({ message: 'User not found.' });
+      return res.status(200).json({ user: results[0] });
+    }
+  );
+});
+
+// SAVE PUSH TOKEN — called once on login/app start so this device can
+// receive healthcare reminder notifications.
+router.put('/push-token', verifyToken, (req, res) => {
+  const userID = req.user.userID;
+  const { pushToken } = req.body;
+  if (!pushToken) return res.status(400).json({ message: 'pushToken is required.' });
+
+  db.query('UPDATE Users SET PushToken = ? WHERE UserID = ?', [pushToken, userID], (err) => {
+    if (err) return res.status(500).json({ message: 'Could not save push token.', error: err.message });
+    return res.status(200).json({ message: 'Push token saved.' });
+  });
+});
+
+// FIREBASE TOKEN — mints a Firebase custom auth token tied to this user's
+// MySQL UserID, so the app can sign into Firestore as the SAME verified
+// identity used everywhere else. Firestore security rules then check
+// request.auth.uid, which will equal this UserID (as a string).
+router.get('/firebase-token', verifyToken, async (req, res) => {
+  try {
+    const uid = String(req.user.userID);
+    const customToken = await firebaseAuth.createCustomToken(uid);
+    return res.status(200).json({ token: customToken });
+  } catch (err) {
+    console.error('Firebase token error:', err.message);
+    return res.status(500).json({ message: 'Could not create Firebase token.', error: err.message });
+  }
 });
 
 module.exports = router;

@@ -117,19 +117,23 @@ router.put('/:id/adopted', (req, res) => {
   );
 });
 
-// ── DELETE ADOPTION POST ──────────────────────────────────────
+// ── DELETE ADOPTION POST ── the owner can delete their own; an Admin can
+// delete any listing (content moderation).
 router.delete('/:id', (req, res) => {
   const { id }  = req.params;
   const userID  = req.user.userID;
-  db.query(
-    'DELETE FROM AdoptionPosts WHERE AdoptionID = ? AND UserID = ?',
-    [id, userID],
-    (err, result) => {
-      if (err) return res.status(500).json({ message: 'Database error.' });
-      if (result.affectedRows === 0) return res.status(404).json({ message: 'Post not found.' });
-      return res.status(200).json({ message: 'Post deleted.' });
-    }
-  );
+  const isAdmin = req.user.role === 'Admin';
+
+  const sql = isAdmin
+    ? 'DELETE FROM AdoptionPosts WHERE AdoptionID = ?'
+    : 'DELETE FROM AdoptionPosts WHERE AdoptionID = ? AND UserID = ?';
+  const params = isAdmin ? [id] : [id, userID];
+
+  db.query(sql, params, (err, result) => {
+    if (err) return res.status(500).json({ message: 'Database error.' });
+    if (result.affectedRows === 0) return res.status(404).json({ message: 'Post not found.' });
+    return res.status(200).json({ message: 'Post deleted.' });
+  });
 });
 
 // ── GET COMMENTS ──────────────────────────────────────────────
@@ -172,19 +176,22 @@ router.post('/:id/comments', (req, res) => {
   );
 });
 
-// ── DELETE COMMENT ────────────────────────────────────────────
+// ── DELETE COMMENT ── owner or Admin can delete a comment.
 router.delete('/:id/comments/:commentID', (req, res) => {
   const { commentID } = req.params;
-  const userID        = req.user.userID;
-  db.query(
-    'DELETE FROM AdoptionComments WHERE CommentID = ? AND UserID = ?',
-    [commentID, userID],
-    (err, result) => {
-      if (err) return res.status(500).json({ message: 'Database error.' });
-      if (result.affectedRows === 0) return res.status(404).json({ message: 'Comment not found.' });
-      return res.status(200).json({ message: 'Comment deleted.' });
-    }
-  );
+  const userID         = req.user.userID;
+  const isAdmin         = req.user.role === 'Admin';
+
+  const sql = isAdmin
+    ? 'DELETE FROM AdoptionComments WHERE CommentID = ?'
+    : 'DELETE FROM AdoptionComments WHERE CommentID = ? AND UserID = ?';
+  const params = isAdmin ? [commentID] : [commentID, userID];
+
+  db.query(sql, params, (err, result) => {
+    if (err) return res.status(500).json({ message: 'Database error.' });
+    if (result.affectedRows === 0) return res.status(404).json({ message: 'Comment not found.' });
+    return res.status(200).json({ message: 'Comment deleted.' });
+  });
 });
 
 module.exports = router;

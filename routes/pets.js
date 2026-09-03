@@ -5,7 +5,7 @@ const verifyToken = require('../middleware/auth');
 
 router.use(verifyToken);
 
-// GET ALL PETS
+// GET ALL PETS (the logged-in user's own)
 router.get('/', (req, res) => {
   const ownerID = req.user.userID;
   const sql = 'SELECT * FROM Pets WHERE OwnerID = ? ORDER BY CreatedAt DESC';
@@ -18,7 +18,21 @@ router.get('/', (req, res) => {
   });
 });
 
-// GET SINGLE PET
+// GET ANOTHER USER'S PETS — public read-only view for their profile page.
+// Placed BEFORE '/:id' below so Express doesn't match "user" as a PetID.
+router.get('/user/:userID', (req, res) => {
+  const { userID } = req.params;
+  const sql = 'SELECT * FROM Pets WHERE OwnerID = ? ORDER BY CreatedAt DESC';
+  db.query(sql, [userID], (err, results) => {
+    if (err) {
+      console.error('GET user pets error:', err.message);
+      return res.status(500).json({ message: 'Database error.', error: err.message });
+    }
+    return res.status(200).json({ pets: results });
+  });
+});
+
+// GET SINGLE PET (must own it)
 router.get('/:id', (req, res) => {
   const petID   = req.params.id;
   const ownerID = req.user.userID;
@@ -55,14 +69,14 @@ router.post('/', (req, res) => {
 router.put('/:id', (req, res) => {
   const petID   = req.params.id;
   const ownerID = req.user.userID;
-  const { name, species, breed, age, healthStatus, photoBase64 } = req.body;
+  const { name, species, breed, age, healthStatus, photoBase64, gender } = req.body;
 
   const sql = `
     UPDATE Pets
-    SET Name = ?, Species = ?, Breed = ?, Age = ?, HealthStatus = ?, PhotoBase64 = ?
+    SET Name = ?, Species = ?, Breed = ?, Age = ?, HealthStatus = ?, PhotoBase64 = ?, Gender = ?
     WHERE PetID = ? AND OwnerID = ?
   `;
-  db.query(sql, [name, species, breed || null, age || null, healthStatus || null, photoBase64 || null, petID, ownerID], (err, result) => {
+  db.query(sql, [name, species, breed || null, age || null, healthStatus || null, photoBase64 || null, gender || 'Unknown', petID, ownerID], (err, result) => {
     if (err) {
       console.error('PUT pet error:', err.message);
       return res.status(500).json({ message: 'Could not update pet.', error: err.message });

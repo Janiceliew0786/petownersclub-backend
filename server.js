@@ -1,6 +1,9 @@
 const express = require('express');
 const cors    = require('cors');
+const cron    = require('node-cron');
 require('dotenv').config();
+
+const { checkAndSendHealthReminders } = require('./jobs/healthReminders');
 
 const app = express();
 
@@ -40,7 +43,9 @@ app.use('/api/pets',      require('./routes/pets'));
 app.use('/api/community', require('./routes/community'));
 app.use('/api/health',    require('./routes/health'));
 app.use('/api/adoption',  require('./routes/adoption'));
+app.use('/api/admin',     require('./routes/admin'));
 app.use('/api/chat',      require('./routes/chat'));
+app.use('/api/vets',      require('./routes/vets'));
 
 app.get('/', (req, res) => {
   res.json({ message: 'A Pet Owners Club API is running.' });
@@ -58,6 +63,12 @@ app.get('/api/health-check', (req, res) => {
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err.message);
   res.status(500).json({ message: 'Server error.', error: err.message });
+});
+
+// Check for due/overdue health reminders once a day at 8:00 AM server time.
+cron.schedule('0 8 * * *', () => {
+  console.log('Running daily health reminder check...');
+  checkAndSendHealthReminders();
 });
 
 const PORT = process.env.PORT || 3000;
