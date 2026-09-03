@@ -65,6 +65,8 @@ app.use((err, req, res, next) => {
   res.status(500).json({ message: 'Server error.', error: err.message });
 });
 
+app.use('/api/health-ai', require('./routes/healthAI'));
+
 // Check for due/overdue health reminders once a day at 8:00 AM server time.
 cron.schedule('0 8 * * *', () => {
   console.log('Running daily health reminder check...');
