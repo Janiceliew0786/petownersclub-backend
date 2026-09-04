@@ -294,4 +294,18 @@ router.get('/firebase-token', verifyToken, async (req, res) => {
   }
 });
 
+// SUPPORT CONTACT — lets any logged-in user (Owner/Vet) find an Admin to
+// reach out to for help. Deliberately NOT gated by requireAdmin, since
+// regular users (who aren't Admins) are exactly who needs this.
+router.get('/support-contact', verifyToken, (req, res) => {
+  db.query(
+    "SELECT UserID, Name, Email FROM Users WHERE Role = 'Admin' ORDER BY UserID ASC LIMIT 1",
+    (err, results) => {
+      if (err) return res.status(500).json({ message: 'Database error.', error: err.message });
+      if (results.length === 0) return res.status(404).json({ message: 'No admin account found.' });
+      return res.status(200).json({ admin: results[0] });
+    }
+  );
+});
+
 module.exports = router;
