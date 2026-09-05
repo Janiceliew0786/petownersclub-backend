@@ -13,7 +13,8 @@ router.get('/', (req, res) => {
   let sql = `
     SELECT
       p.PostID, p.UserID, p.Category, p.Topic, p.Content, p.MediaURL, p.CreatedAt,
-      u.Name AS AuthorName, u.Role AS AuthorRole, u.VerificationStatus AS AuthorVerificationStatus,
+      u.Name AS AuthorName, u.Role AS AuthorRole, u.PhotoBase64 AS AuthorPhoto,
+      u.VerificationStatus AS AuthorVerificationStatus,
       (SELECT COUNT(*) FROM PostLikes l WHERE l.PostID = p.PostID) AS LikeCount,
       (SELECT COUNT(*) FROM PostComments c WHERE c.PostID = p.PostID) AS CommentCount,
       (SELECT COUNT(*) FROM PostLikes l WHERE l.PostID = p.PostID AND l.UserID = ?) AS UserLiked,
@@ -112,7 +113,8 @@ router.get('/:id/comments', (req, res) => {
   const postID = req.params.id;
   const myID   = req.user.userID;
   const sql = `
-    SELECT c.*, u.Name AS AuthorName, u.Role AS AuthorRole, u.VerificationStatus AS AuthorVerificationStatus,
+    SELECT c.*, u.Name AS AuthorName, u.Role AS AuthorRole, u.PhotoBase64 AS AuthorPhoto,
+      u.VerificationStatus AS AuthorVerificationStatus,
       (SELECT COUNT(*) FROM HelpfulMarks h WHERE h.CommentID = c.CommentID) AS HelpfulCount,
       (SELECT COUNT(*) FROM HelpfulMarks h WHERE h.CommentID = c.CommentID AND h.UserID = ?) AS UserMarkedHelpful,
       (SELECT COUNT(*) FROM HelpfulMarks h2 JOIN PostComments c2 ON h2.CommentID = c2.CommentID
