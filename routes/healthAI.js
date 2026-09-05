@@ -6,7 +6,7 @@ router.use(verifyToken);
 
 // Uses Gemini's free-tier API. Node 18+ has fetch built in, no extra
 // dependency needed.
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent';
 
 const SYSTEM_PROMPT = `You are a veterinary symptom-triage assistant inside a pet-care app called "A Pet Owners Club". You are NOT a substitute for a real veterinarian and must never claim to give a definitive diagnosis.
 
