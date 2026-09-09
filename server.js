@@ -46,6 +46,7 @@ app.use('/api/adoption',  require('./routes/adoption'));
 app.use('/api/admin',     require('./routes/admin'));
 app.use('/api/chat',      require('./routes/chat'));
 app.use('/api/vets',      require('./routes/vets'));
+app.use('/api/nearby-clinics', require('./routes/nearbyClinics'));
 
 app.get('/', (req, res) => {
   res.json({ message: 'A Pet Owners Club API is running.' });
