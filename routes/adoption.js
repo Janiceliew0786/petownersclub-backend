@@ -10,7 +10,7 @@ router.get('/', (req, res) => {
   const { species, status } = req.query;
 
   let sql = `
-    SELECT a.*, u.Name AS PosterName, u.ContactNumber AS PosterContact,
+    SELECT a.*, u.Name AS PosterName, u.ContactNumber AS PosterContact, u.PhotoBase64 AS PosterPhoto,
       (SELECT COUNT(*) FROM AdoptionComments c WHERE c.AdoptionID = a.AdoptionID) AS CommentCount
     FROM AdoptionPosts a
     JOIN Users u ON a.UserID = u.UserID
@@ -49,7 +49,7 @@ router.get('/', (req, res) => {
 router.get('/:id', (req, res) => {
   const { id } = req.params;
   const sql = `
-    SELECT a.*, u.Name AS PosterName, u.ContactNumber AS PosterContact
+    SELECT a.*, u.Name AS PosterName, u.ContactNumber AS PosterContact, u.PhotoBase64 AS PosterPhoto
     FROM AdoptionPosts a
     JOIN Users u ON a.UserID = u.UserID
     WHERE a.AdoptionID = ?

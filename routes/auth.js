@@ -10,7 +10,7 @@ const { auth: firebaseAuth } = require('../firebaseAdmin');
 
 // REGISTER
 router.post('/register', (req, res) => {
-  const { name, email, password, role, contactNumber, licenseNumber, licensePhotoBase64 } = req.body;
+  const { name, email, password, role, contactNumber, licenseNumber, licensePhotos } = req.body;
   if (!name || !email || !password) {
     return res.status(400).json({ message: 'Name, email and password are required.' });
   }
@@ -18,6 +18,13 @@ router.post('/register', (req, res) => {
   if (finalRole === 'Veterinarian' && !licenseNumber) {
     return res.status(400).json({ message: 'A license number is required to register as a Veterinarian.' });
   }
+
+  // licensePhotos is an array of data URIs (or null/empty). The first photo
+  // is also stored in the original single-photo column for backward
+  // compatibility with any code that still reads it directly.
+  const photosArray = Array.isArray(licensePhotos) ? licensePhotos : [];
+  const firstPhoto = photosArray[0] || null;
+  const photosJSON = photosArray.length > 0 ? JSON.stringify(photosArray) : null;
 
   db.query('SELECT * FROM Users WHERE Email = ?', [email], (err, results) => {
     if (err) return res.status(500).json({ message: 'Database error.', error: err.message });
@@ -30,13 +37,13 @@ router.post('/register', (req, res) => {
     const verificationStatus = finalRole === 'Veterinarian' ? 'Pending' : 'Not Applicable';
 
     const sql = `INSERT INTO Users
-      (Name, Email, Password, Role, ContactNumber, VerificationStatus, LicenseNumber, LicensePhotoBase64)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`;
+      (Name, Email, Password, Role, ContactNumber, VerificationStatus, LicenseNumber, LicensePhotoBase64, LicensePhotosJSON)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
     db.query(
       sql,
       [
         name, email, hashedPassword, finalRole, contactNumber || null,
-        verificationStatus, licenseNumber || null, licensePhotoBase64 || null,
+        verificationStatus, licenseNumber || null, firstPhoto, photosJSON,
       ],
       (err, result) => {
         if (err) return res.status(500).json({ message: 'Could not register user.', error: err.message });
@@ -195,7 +202,7 @@ router.put('/photo', verifyToken, (req, res) => {
 router.get('/profile', verifyToken, (req, res) => {
   const userID = req.user.userID;
   db.query(
-    `SELECT UserID, Name, Email, Role, ContactNumber, PhotoBase64, VerificationStatus, LicenseNumber, LicensePhotoBase64,
+    `SELECT UserID, Name, Email, Role, ContactNumber, PhotoBase64, VerificationStatus, LicenseNumber, LicensePhotoBase64, LicensePhotosJSON,
       (SELECT COUNT(*) FROM HelpfulMarks h JOIN PostComments c ON h.CommentID = c.CommentID
        WHERE c.UserID = Users.UserID) AS HelpfulCount
      FROM Users WHERE UserID = ?`,
@@ -226,7 +233,7 @@ router.put('/profile', verifyToken, (req, res) => {
 // entirely after the fact.
 router.put('/license', verifyToken, (req, res) => {
   const userID = req.user.userID;
-  const { licenseNumber, licensePhotoBase64 } = req.body;
+  const { licenseNumber, licensePhotos } = req.body;
 
   if (req.user.role !== 'Veterinarian') {
     return res.status(403).json({ message: 'Only veterinarian accounts have license credentials.' });
@@ -235,10 +242,14 @@ router.put('/license', verifyToken, (req, res) => {
     return res.status(400).json({ message: 'License number is required.' });
   }
 
+  const photosArray = Array.isArray(licensePhotos) ? licensePhotos : [];
+  const firstPhoto = photosArray[0] || null;
+  const photosJSON = photosArray.length > 0 ? JSON.stringify(photosArray) : null;
+
   const sql = `UPDATE Users
-               SET LicenseNumber = ?, LicensePhotoBase64 = ?, VerificationStatus = 'Pending'
+               SET LicenseNumber = ?, LicensePhotoBase64 = ?, LicensePhotosJSON = ?, VerificationStatus = 'Pending'
                WHERE UserID = ?`;
-  db.query(sql, [licenseNumber.trim(), licensePhotoBase64 || null, userID], (err) => {
+  db.query(sql, [licenseNumber.trim(), firstPhoto, photosJSON, userID], (err) => {
     if (err) return res.status(500).json({ message: 'Could not update credentials.', error: err.message });
     return res.status(200).json({
       message: 'Credentials updated. Your account is pending verification again.',

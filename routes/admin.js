@@ -7,7 +7,7 @@ const { checkAndSendHealthReminders } = require('../jobs/healthReminders');
 
 // GET all veterinarian accounts awaiting verification.
 router.get('/pending-vets', verifyToken, requireAdmin, (req, res) => {
-  const sql = `SELECT UserID, Name, Email, ContactNumber, LicenseNumber, LicensePhotoBase64, CreatedAt
+  const sql = `SELECT UserID, Name, Email, ContactNumber, LicenseNumber, LicensePhotoBase64, LicensePhotosJSON, CreatedAt
                FROM Users
                WHERE Role = 'Veterinarian' AND VerificationStatus = 'Pending'
                ORDER BY CreatedAt ASC`;
