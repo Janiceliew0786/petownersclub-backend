@@ -84,9 +84,11 @@ router.post('/login', (req, res) => {
         userID:             user.UserID,
         name:               user.Name,
         email:              user.Email,
+        contactNumber:      user.ContactNumber || null,
         role:               user.Role,
         photoBase64:        user.PhotoBase64 || null,
         verificationStatus: user.VerificationStatus,
+        licenseNumber:      user.LicenseNumber || null,
       },
     });
   });
@@ -264,7 +266,7 @@ router.put('/license', verifyToken, (req, res) => {
 router.get('/public-profile/:userID', verifyToken, (req, res) => {
   const { userID } = req.params;
   db.query(
-    `SELECT UserID, Name, Email, ContactNumber, Role, PhotoBase64, VerificationStatus,
+    `SELECT UserID, Name, Role, PhotoBase64, VerificationStatus,
       (SELECT COUNT(*) FROM HelpfulMarks h JOIN PostComments c ON h.CommentID = c.CommentID
        WHERE c.UserID = Users.UserID) AS HelpfulCount
      FROM Users WHERE UserID = ?`,
